@@ -113,9 +113,11 @@ const char *pu_ui_msg_progress(alpm_progress_t event)
   }
 }
 
-void pu_ui_cb_progress(alpm_progress_t event, const char *pkgname, int percent,
-    size_t total, size_t current)
+void pu_ui_cb_progress(void *ctx, alpm_progress_t event, const char *pkgname,
+    int percent, size_t total, size_t current)
 {
+  (void)ctx;
+
   const char *opr = pu_ui_msg_progress(event);
   static int percent_last = -1;
 
@@ -140,8 +142,10 @@ void pu_ui_cb_progress(alpm_progress_t event, const char *pkgname, int percent,
   percent_last = percent;
 }
 
-void pu_ui_cb_event(alpm_event_t *event)
+void pu_ui_cb_event(void *ctx, alpm_event_t *event)
 {
+  (void)ctx;
+
   switch(event->type) {
     case ALPM_EVENT_CHECKDEPS_START:
       puts("Checking dependencies...");
@@ -181,7 +185,10 @@ void pu_ui_cb_event(alpm_event_t *event)
     case ALPM_EVENT_RESOLVEDEPS_START:
       puts("Resolving dependencies...");
       break;
-    case ALPM_EVENT_RETRIEVE_START:
+    case ALPM_EVENT_DB_RETRIEVE_START:
+      puts("Downloading databases...");
+      break;
+    case ALPM_EVENT_PKG_RETRIEVE_START:
       puts("Downloading packages...");
       break;
     case ALPM_EVENT_SCRIPTLET_INFO:
@@ -212,12 +219,11 @@ void pu_ui_cb_event(alpm_event_t *event)
     case ALPM_EVENT_LOAD_DONE:
     case ALPM_EVENT_LOAD_START:
     case ALPM_EVENT_PACKAGE_OPERATION_START:
-    case ALPM_EVENT_PKGDOWNLOAD_DONE:
-    case ALPM_EVENT_PKGDOWNLOAD_FAILED:
-    case ALPM_EVENT_PKGDOWNLOAD_START:
+    case ALPM_EVENT_PKG_RETRIEVE_DONE:
+    case ALPM_EVENT_PKG_RETRIEVE_FAILED:
     case ALPM_EVENT_RESOLVEDEPS_DONE:
-    case ALPM_EVENT_RETRIEVE_DONE:
-    case ALPM_EVENT_RETRIEVE_FAILED:
+    case ALPM_EVENT_DB_RETRIEVE_DONE:
+    case ALPM_EVENT_DB_RETRIEVE_FAILED:
     case ALPM_EVENT_TRANSACTION_DONE:
       /* ignore */
       break;
@@ -296,8 +302,10 @@ long pu_ui_select_index(long def, long min, long max, const char *prompt, ...)
   }
 }
 
-void pu_ui_cb_question(alpm_question_t *question)
+void pu_ui_cb_question(void *ctx, alpm_question_t *question)
 {
+  (void)ctx;
+
   switch(question->type) {
     case ALPM_QUESTION_INSTALL_IGNOREPKG:
       {
@@ -391,31 +399,45 @@ void pu_ui_cb_question(alpm_question_t *question)
   }
 }
 
-void pu_ui_cb_download(const char *filename, off_t xfered, off_t total)
+void pu_ui_cb_download(void *ctx, const char *filename,
+    alpm_download_event_type_t event, void *data)
 {
   static struct timeval last_update = {0, 0};
+  struct timeval now;
+  off_t xfered, total;
   char end = '\r';
 
-  if(xfered == 0 && total == 0) {
-    /* non-transfer event; ignore */
-    return;
-  } else if(xfered < 0) {
+  (void)ctx;
+
+  switch(event) {
+    case ALPM_DOWNLOAD_INIT:
+    case ALPM_DOWNLOAD_RETRY:
+      xfered = total = 0;
+      /* new download is starting, always print the initial status */
+      gettimeofday(&last_update, NULL);
+      break;
+
+    case ALPM_DOWNLOAD_PROGRESS:
+      xfered = ((alpm_download_event_progress_t *)data)->downloaded;
+      total = ((alpm_download_event_progress_t *)data)->total;
+      /* mid-download, check if enough time has elapsed to update the status */
+      gettimeofday(&now, NULL);
+      if(_pu_ui_time_diff(&now, &last_update) < PU_MAX_REFRESH_MS) {
+        return;
+      }
+      last_update = now;
+      break;
+
+    case ALPM_DOWNLOAD_COMPLETED:
+      xfered = total = ((alpm_download_event_completed_t *)data)->total;
+      /* download is done, wrap to the next line */
+      end = '\n';
+      break;
+  }
+
+  if(xfered < 0) {
     /* uh-oh, something has gone wrong */
     return;
-  } else if(xfered == 0 && total == -1) {
-    /* new download is starting, always print the initial status */
-    gettimeofday(&last_update, NULL);
-  } else if(xfered == total) {
-    /* download is done, wrap to the next line */
-    end = '\n';
-  } else {
-    /* mid-download, check if enough time has elapsed to update the status */
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    if(_pu_ui_time_diff(&now, &last_update) < PU_MAX_REFRESH_MS) {
-      return;
-    }
-    last_update = now;
   }
 
   if(total <= 0) {

@@ -518,8 +518,9 @@ pu_config_t *parse_opts(int argc, char **argv)
 	return config;
 }
 
-void cb_log(alpm_loglevel_t level, const char *fmt, va_list args)
+void cb_log(void *ctx, alpm_loglevel_t level, const char *fmt, va_list args)
 {
+	(void)ctx;
 	if(level & log_level) {
 		vprintf(fmt, args);
 	}
@@ -566,20 +567,25 @@ int load_pkg_files()
 	alpm_siglevel_t slr = alpm_option_get_remote_file_siglevel(handle);
 	alpm_siglevel_t sll = alpm_option_get_local_file_siglevel(handle);
 
+	/* FIXME: use alpm_fetch_pkgurl() on multiple packages at a time */
+
 	for(i = files; i; i = i->next) {
 		alpm_siglevel_t sl = sll;
 		alpm_pkg_t *pkg;
 
 		if(strstr(i->data, "://")) {
-			char *path = alpm_fetch_pkgurl(handle, i->data);
-			if(!path) {
+			alpm_list_t urls = { .data = (void *)i->data }, *pkgs = NULL;
+			int r = alpm_fetch_pkgurl(handle, &urls, &pkgs);
+			if (r < 0) {
 				fprintf(stderr, "error: could not load '%s' (%s)\n",
 						(char*) i->data, alpm_strerror(alpm_errno(handle)));
 				ret++;
+				FREELIST(pkgs);
 				continue;
 			} else {
 				free(i->data);
-				i->data = path;
+				i->data = pkgs->data;
+				alpm_list_free(pkgs);
 				sl = slr;
 			}
 		}
@@ -767,7 +773,7 @@ int set_bool_response(alpm_question_t *q, enum bool_disposition d) {
 	return 0; /* oh noes, something went wrong */
 }
 
-void cb_question(alpm_question_t *question)
+void cb_question(void *ctx, alpm_question_t *question)
 {
 	int autoset = 0;
 
@@ -813,7 +819,7 @@ void cb_question(alpm_question_t *question)
 	if(autoset || noconfirm) {
 		print_q_resolution(question);
 	} else {
-		pu_ui_cb_question(question);
+		pu_ui_cb_question(ctx, question);
 	}
 }
 
@@ -867,11 +873,11 @@ int main(int argc, char **argv)
 		alpm_option_set_hookdirs(handle, NULL);
 	}
 
-	alpm_option_set_questioncb(handle, cb_question);
-	alpm_option_set_progresscb(handle, pu_ui_cb_progress);
-	alpm_option_set_eventcb(handle, pu_ui_cb_event);
-	alpm_option_set_dlcb(handle, pu_ui_cb_download);
-	alpm_option_set_logcb(handle, cb_log);
+	alpm_option_set_questioncb(handle, cb_question, NULL);
+	alpm_option_set_progresscb(handle, pu_ui_cb_progress, NULL);
+	alpm_option_set_eventcb(handle, pu_ui_cb_event, NULL);
+	alpm_option_set_dlcb(handle, pu_ui_cb_download, NULL);
+	alpm_option_set_logcb(handle, cb_log, NULL);
 
 	for(i = ignore_pkg; i; i = i->next) {
 		alpm_option_add_ignorepkg(handle, i->data);
@@ -887,18 +893,17 @@ int main(int argc, char **argv)
 	}
 
 	if(dbsync) {
-		for(i = alpm_get_syncdbs(handle); i; i = i->next) {
-			alpm_db_t *db = i->data;
-			int res = alpm_db_update(0, db);
-			if(res < 0) {
-				fprintf(stderr, "error: could not sync db '%s' (%s)\n",
-						alpm_db_get_name(db), alpm_strerror(alpm_errno(handle)));
-			} else if(res == 1) {
-				/* db was already up to date */
-				printf("%s is up to date\n", alpm_db_get_name(db));
-			}
-			/* else: callbacks display relevant information */
+		alpm_list_t *dbs = alpm_get_syncdbs(handle);
+		int res = alpm_db_update(handle, dbs, 0);
+		if(res < 0) {
+			ret = 1;
+			fprintf(stderr, "error: could not sync all databases (%s)\n",
+					alpm_strerror(alpm_errno(handle)));
+		} else if(res == 1) {
+			/* everything was already up to date */
+			printf("all databases are up to date\n");
 		}
+		/* else: callbacks display relevant information */
 	}
 
 	for(i = add; i; i = i->next) {

@@ -369,7 +369,7 @@ alpm_handle_t *pu_initialize_handle_from_config(pu_config_t *config)
   alpm_option_set_logfile(handle, config->logfile);
   alpm_option_set_gpgdir(handle, config->gpgdir);
   alpm_option_set_usesyslog(handle, config->usesyslog);
-  alpm_option_set_arch(handle, config->architecture);
+  alpm_option_add_architecture(handle, config->architecture);
   alpm_option_set_disable_dl_timeout(handle, config->disabledownloadtimeout);
 
   alpm_option_set_default_siglevel(handle, config->siglevel);

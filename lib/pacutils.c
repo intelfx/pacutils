@@ -23,6 +23,7 @@
 #include <glob.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
+#include <assert.h>
 
 #include "pacutils.h"
 #include "pacutils/config-defaults.h"
@@ -84,9 +85,14 @@ alpm_pkg_t *pu_find_pkgspec(alpm_handle_t *handle, const char *pkgspec)
 			= strncmp(pkgspec, "file://", 7) == 0
 			? alpm_option_get_local_file_siglevel(handle)
 			: alpm_option_get_remote_file_siglevel(handle);
-		char *path = alpm_fetch_pkgurl(handle, pkgspec);
-		int err = alpm_pkg_load(handle, path ? path : pkgspec, 1, sl, &pkg);
-		free(path);
+		alpm_list_t urls = { .data = (void *)pkgspec }, *pkgs = NULL;
+		int err = alpm_fetch_pkgurl(handle, &urls, &pkgs);
+		if (err) {
+			goto out;
+		}
+		err = alpm_pkg_load(handle, (char *)pkgs->data, 1, sl, &pkg);
+out:
+		FREELIST(pkgs);
 		if(!err) {
 			return pkg;
 		}
